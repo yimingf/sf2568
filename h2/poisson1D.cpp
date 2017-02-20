@@ -8,10 +8,10 @@ using namespace std;
 
 // coefficient functions, analytical answer is u = sin(5pi*x)
 double r(const double x) {
-  return -x;
+  return -3*x;
 }
 double f(const double x) {
-  return -(25.0*M_PI*M_PI+x)*sin(5.0*M_PI*x);
+  return exp(-3*x);
 }
 
 int main(int argc, char** argv) {
