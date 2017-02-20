@@ -40,8 +40,11 @@ int main(int argc, char** argv) {
   
   Vec u(I+2, 0), u_new(I+2, 0);
   int right = rank+1, left = rank-1;
-  if(rank == size-1) right = MPI_PROC_NULL;
-  else if(rank == 0) left  = MPI_PROC_NULL;
+  if(rank == size-1) {
+    right = MPI_PROC_NULL;
+  } else if(rank == 0) {
+    left = MPI_PROC_NULL;
+  }
 
   for(int step = 0; step < iter_max; ++step) {
      if(rank%2 == 0) { // red
