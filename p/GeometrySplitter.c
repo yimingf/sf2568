@@ -13,32 +13,26 @@ int largestSide;    //Largest side of the board (not used)
 int numXDivisions;  //Number of partitions along the x axis (typical case)
 int numYDivisions;  //Number of partitions along the y axis (typical case)
 
-int extraPartitions;    //Number of extra partitions that need to be dealt with after factoring
-
+int extraPartitions; // Number of extra partitions need to be dealt with after factoring
 bool isSmallestSideVertical;    //Which axis is the smallest side
-
 int numberOfPartitions; //Number of actual partitions
+struct partition* partitions;
 
-struct partition * partitions;    //Holds information about completed partition layout
+void compareSides (void);    //Function prototyping
 
-void compareSides(void);    //Function prototyping
-
-/* Given two factors, determines how to divide the board by them */
-void setDivisions(int factor1, int factor2) {
+void setDivisions (int factor1, int factor2) {
   bool inPlace;
   int tempFactor;
 
-  //If one side evenly divides, that's a good thing!
-  if(((largestSide % factor1 == 0) || (smallestSide % factor2 == 0)) && (factor1 <= largestSide && factor2 <= smallestSide))
+  if(((largestSide % factor1 == 0) || (smallestSide % factor2 == 0)) && (factor1 <= largestSide && factor2 <= smallestSide)) {
     inPlace = true;
-  else if(((smallestSide % factor1 == 0) || (largestSide % factor2 == 0)) && (factor1 <= smallestSide && factor2 <= largestSide))
+  } else if(((smallestSide % factor1 == 0) || (largestSide % factor2 == 0)) && (factor1 <= smallestSide && factor2 <= largestSide)) {
     inPlace = false;
-  else
+  } else {
     inPlace = true;
+  }
 
-  //Swaps factors around in the case of a bad initial assignment
-  if((isSmallestSideVertical && !inPlace) || (!isSmallestSideVertical && inPlace))
-  {
+  if((isSmallestSideVertical && !inPlace) || (!isSmallestSideVertical && inPlace)) {
     tempFactor = factor1;
     factor1 = factor2;
     factor2 = tempFactor;
@@ -49,8 +43,7 @@ void setDivisions(int factor1, int factor2) {
 }
 
 /* Given the number of partitions, determines the two closest factors after partition size is (potentially) massaged upwards to create a nicely divisible partition number */
-void determineFactors(void)
-{
+void determineFactors (void) {
   int i;
   int root;
   int total;
@@ -68,31 +61,26 @@ void determineFactors(void)
   otherFactor = total / highestFactor;
 
   //If these factors are unable to map to the sides
-  if((highestFactor > largestSide || otherFactor > smallestSide) && (highestFactor > smallestSide || otherFactor > largestSide))
-  {
+  if((highestFactor > largestSide || otherFactor > smallestSide) && (highestFactor > smallestSide || otherFactor > largestSide)) {
     if(smallestSide > total/smallestSide)
       setDivisions(smallestSide, total/smallestSide);
     else
       setDivisions(total/smallestSide, smallestSide);
-  }
-  else if(otherFactor > numberOfPartitions)
-  {
+  } else if (otherFactor > numberOfPartitions) {
     setDivisions(numberOfPartitions, 1);
-  }
-  else
+  } else {
     setDivisions(highestFactor, otherFactor);
+  }
 }
 
 void allocatepartitions() {
   partitions = malloc(sizeof(struct partition)*numberOfPartitions);
 }
 
-/* Frees allocated memory */
 void deallocatepartitions() {
   free(partitions);
 }
 
-/* Given some x coordinate (at the end of the array), determines the amount of space in the y direction that needs to be filled */
 int findMissingYSpace(int row) {
   int i;
   int result;
@@ -116,58 +104,6 @@ int findNumberOfCellsInRow(int row) {
   return result;
 }
 
-/* Expands uniformly created cells to fit the board configuration */
-void massageCells() {
-  int offset;
-  int totalNumber;
-  int extraYSpace;
-  int i;
-  int j;
-  int startingPoint;
-  int tempSpace;
-  int massageSpace;
-  int numberOfCells;
-  int oddCells;
-  int normalSubtractor;
-
-
-  offset = numberOfPartitions % numXDivisions;
-  totalNumber = numXDivisions - offset;
-
-  ///*
-  for(i = 0; i < numXDivisions; i++)
-  {
-    startingPoint = numberOfPartitions - 1 - i;
-
-    extraYSpace = findMissingYSpace(startingPoint);
-    tempSpace = extraYSpace;
-
-    numberOfCells = findNumberOfCellsInRow(startingPoint);
-
-    massageSpace = (extraYSpace / numberOfCells) + 1;
-
-    oddCells = numberOfCells + (extraYSpace - massageSpace * numberOfCells);
-
-    normalSubtractor = massageSpace - 1;
-    for(j = 0; j < numberOfCells; j++)
-    {
-      if(j < oddCells)
-      {
-        tempSpace -= massageSpace;
-        partitions[startingPoint - numXDivisions * j].startY += tempSpace;
-        partitions[startingPoint - numXDivisions * j].lengthY += massageSpace;
-      }
-      else
-      {
-        tempSpace -= normalSubtractor;
-        partitions[startingPoint - numXDivisions * j].startY += tempSpace;
-        partitions[startingPoint - numXDivisions * j].lengthY += normalSubtractor;
-      }
-    }
-  }
-}
-
-/* Determines board geometry */
 void splitGeometry(void) {
   int i;
   int xLength;
@@ -179,10 +115,9 @@ void splitGeometry(void) {
 
   allocatepartitions();
   compareSides();
-
   extraPartitions = 0; //Range of 0 - (smallestSide - 1)
 
-  if(numberOfPartitions > largestSide) {
+  if (numberOfPartitions > largestSide) {
     while((numberOfPartitions % smallestSide != 0) && (numberOfPartitions % largestSide != 0))
       numberOfPartitions--;
   }
@@ -191,18 +126,10 @@ void splitGeometry(void) {
 
   xLength = widthX / numXDivisions;
   yLength = widthY / numYDivisions;
-
   extraX = (widthX % numXDivisions);
   extraY = (widthY % numYDivisions);
 
   tempExtraX = extraX;
-
-  /*
-  printf("Number of xDivisions: %d of width: %d\n", numXDivisions, xLength);
-  printf("Number of yDivisions: %d of width: %d\n", numYDivisions, yLength);
-  printf("Extra partitions: %d\n", extraPartitions);
-  */
-
   totalX = 0;
 
   for (i = 0; i < numberOfPartitions ; i++) {
@@ -216,7 +143,6 @@ void splitGeometry(void) {
       partitions[i].startY = partitions[i-1].lengthY + partitions[i-1].startY;
 
       if(extraY > 0) {
-        //partitions[i].startY += 1;
         extraY--;
       }
     } else {
@@ -239,45 +165,6 @@ void splitGeometry(void) {
   }
 }
 
-/* Prints out the array */
-/*
-void printArray(void)
-{
-  int i;
-  HEZDIMAGE image;
-  char * fileString;
-
-  fileString = malloc(sizeof(char) * 40);
-
-  sprintf(fileString, "%d %d %d - PartitionOutput.bmp", widthX, widthY, numberOfPartitions);
-
-  for(i = 0; i < numberOfPartitions; i++)
-  {
-    //printf("%d: Upper corner: %d,%d Lower corner: %d,%d\n", i, partitions[i].startX, partitions[i].startY, partitions[i].startX + partitions[i].lengthX, partitions[i].startY + partitions[i].lengthY);
-  }
-
-  image = ezd_create(640, -480, 24, 0);
-
-  ezd_fill(image, 0x606060);
-
-  for(i = 0; i < numberOfPartitions; i++)
-  {
-    ezd_rect(image, partitions[i].startX * 20, partitions[i].startY * 20, (partitions[i].startX + partitions[i].lengthX) * 20, (partitions[i].startY + partitions[i].lengthY) * 20, 0x00ff00);
-  }
-
-  ezd_save(image, fileString);
-
-  free(fileString);
-
-  ezd_destroy(image);
-
-  //getch();
-  //closegraph();
-
-}
-*/
-
-
 void compareSides(void) {
   int smallResult;
   int largeResult;
@@ -296,16 +183,14 @@ void compareSides(void) {
   largestSide = largeResult;
 }
 
-int * neighborList(int partitionNumber) {
-  int * list;
+int* neighborList(int partitionNumber) {
+  int* list;
   int positionX;
   int positionY;
   int currentPosition;
 
   currentPosition = 0;
-
   list = malloc(sizeof(int)*4); // 1. 0W 1E 2N 3S
-
   positionX = partitionNumber%numXDivisions;
   positionY = partitionNumber/numXDivisions;
 

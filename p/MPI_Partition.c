@@ -4,16 +4,15 @@
 #include <mpi.h>
 #include "GeometrySplitter.h"
 
-int identity;
-int actualPartitions;
-struct partition *partitionArray;
-char* localBoard;
-char* nextGenBoard;
-char* masterBoard;
+int id;
+int numPartitions;
+struct partition* partitions;
+struct pt* localBoard; // 2
+struct pt* nextGenBoard;
+struct pt* masterBoard;
 
-int masterBoard_columns;
-int masterBoard_rows;
-
+int masterBoardCol;
+int masterBoardRow;
 struct partition myCoords;
 
 int numberOfGenerations;
@@ -21,20 +20,16 @@ int myNeighborIDs[4]; // 1
 MPI_Status lastStatus;
 MPI_Request lastRequest;
 
-int localBoard_Size;
+int localBoardSize;
 
-char** allocatedMemory;
-int numberOfMemoryAllocations;
+struct pt** allocatedMemory; // 2
+int numMalloc;
 
 typedef enum {
-  NW_UPDATE,
   N_UPDATE,
-  NE_UPDATE,
   W_UPDATE,
   E_UPDATE,
-  SW_UPDATE,
   S_UPDATE,
-  SE_UPDATE,
   BOUNDS_MESSAGE,
   GENERATION_MESSAGE,
   NEIGHBORLIST_MESSAGE,
@@ -45,99 +40,85 @@ typedef enum {
 bool isAlive(int x, int y);
 void swapBoards();
 
-char getArray(int x, int y) {
+struct pt getArray(int x, int y) { // 2
   return localBoard[x+(y*(myCoords.lengthX+4))]; // 1
 }
 
-void setNextArray(int x, int y, int value) {
-  nextGenBoard[x+(y*(myCoords.lengthX+4))] = value; // 1
+void setReproduce(int x, int y, int f, int r, int v) { // 2
+  nextGenBoard[x+(y*(myCoords.lengthX+4))].numFox = f; // 1
+  nextGenBoard[x+(y*(myCoords.lengthX+4))].numRab = r;
+  nextGenBoard[x+(y*(myCoords.lengthX+4))].numVeg = v;
+}
+
+void setMigration(int x, int y, int f, int r) { // 2
+  nextGenBoard[x+(y*(myCoords.lengthX+4))].numFox += f;
+  nextGenBoard[x+(y*(myCoords.lengthX+4))].numRab += r;
 }
 
 void freeMemory() {
-  for(int i = 0; i < numberOfMemoryAllocations; i++)
+  for(int i = 0; i < numMalloc; i++)
     free(allocatedMemory[i]);
 }
 
-/* Parses the input file character by character. Assumes proper file format of ITERATIONS\bCOLUMNS\bROWS\bARRAY_STUFF. Sets the resulting data to *currentGenBoard */
-void parseFile(int argc, char ** argv) {
-  int numberOfProcesses;
+void parseFile(int argc, char** argv) {
+  int numProcesses;
 
-  //Keeps track of the total number of *s and .s in the file
   int counter;
+  int f, r, v;
 
-  //Keeps track of the current character being read from the file
-  char currentChar;
-
-  MPI_Comm_size(MPI_COMM_WORLD, &numberOfProcesses);
+  MPI_Comm_size(MPI_COMM_WORLD, &numProcesses);
   counter = 0;
 
   FILE * filePtr = fopen(argv[1], "r");
-
-  //Breaks if the user pointed to a file that doesn't exist
   if(filePtr == NULL) {
     printf("Could not find file! Please restart and retry.");
     exit(1);
   }
 
   fscanf(filePtr, "%d", &numberOfGenerations);
-  fscanf(filePtr, "%d", &masterBoard_columns);
-  fscanf(filePtr, "%d", &masterBoard_rows);
+  fscanf(filePtr, "%d", &masterBoardCol);
+  fscanf(filePtr, "%d", &masterBoardRow);
 
-  actualPartitions = numberOfProcesses;
+  numPartitions = numProcesses;
 
-  // TODO: change to row*col*(struct)
-  masterBoard = malloc(masterBoard_rows*masterBoard_columns*sizeof(char));
-  // TODO: change to fox-rabbit configuration
-  while(counter < (masterBoard_rows * masterBoard_columns)) {
-    if(fscanf(filePtr, "%c", &currentChar) == EOF) {
-      printf("Your file specification's jacked up, might want to check it out.");
-      exit(1);
-    }
-    if(currentChar == 42) {
-      masterBoard[counter] = 1; // TODO: new box (num_fox, num_rabbit);
-      counter++;
-    }
-    else if(currentChar == 46) {
-      masterBoard[counter] = 0;
-      counter++;
-    }
+  masterBoard = malloc(masterBoardRow*masterBoardCol*sizeof(struct pt)); // 2
+  while(counter < (masterBoardRow*masterBoardCol)) { // 2
+    fscanf(filePtr, "%d", &f);
+    fscanf(filePtr, "%d", &r);
+    fscanf(filePtr, "%d", &v);
+    masterBoard[counter].numFox = f;
+    masterBoard[counter].numRab = r;
+    masterBoard[counter].numVeg = v;
+
+    counter++;
   }
-
   fclose(filePtr);
 }
 
-/* Called when the final board configurations have been calculated, all processes submit their sections for gather */
 void finalizeBoard() {
   int size;
 
-  if(!identity) {
-    char* incomingBoard;
+  if(!id) {
+    struct pt* incomingBoard; // 2
 
-    for(int i = 0; i < actualPartitions; i++) {
-      size = (partitionArray[i].lengthX+4)*(partitionArray[i].lengthY+4); // 1
-      incomingBoard = malloc(sizeof(char) * size);
+    for(int i = 0; i < numPartitions; i++) {
+      size = (partitions[i].lengthX+4)*(partitions[i].lengthY+4); // 1
+      incomingBoard = malloc(sizeof(struct pt)*size); // 2
+      MPI_Recv(incomingBoard, sizeof(struct pt)*size, MPI_BYTE, i, BOARD_MESSAGE, MPI_COMM_WORLD, &lastStatus);
 
-      MPI_Recv(incomingBoard, size, MPI_CHAR, i, BOARD_MESSAGE, MPI_COMM_WORLD, &lastStatus);
-
-      for(int k = 0; k < partitionArray[i].lengthY; k++) {
-        for(int j = 0; j < partitionArray[i].lengthX; j++) {
-          int clientEquivLocation = ((k+2)*(partitionArray[i].lengthX+4)+(j+2)); // 1
-
-          masterBoard[j+partitionArray[i].startX+((k+partitionArray[i].startY)*masterBoard_columns)] = incomingBoard[clientEquivLocation];
+      for(int k = 0; k < partitions[i].lengthY; k++) {
+        for(int j = 0; j < partitions[i].lengthX; j++) {
+          int equivLocation = ((k+2)*(partitions[i].lengthX+4)+(j+2)); // 1
+          masterBoard[j+partitions[i].startX+((k+partitions[i].startY)*masterBoardCol)] = incomingBoard[equivLocation];
         }
       }
-
       free(incomingBoard);
     }
 
-    printf("\nFinal board configuration: \n");
-
-    for(int i = 0; i < masterBoard_columns*masterBoard_rows; i++) {
-      if(masterBoard[i] == 1)
-        printf("*");
-      else
-        printf(".");
-      if((i + 1) % (masterBoard_columns) == 0)
+    printf("\nFinal board configuration: \n"); // 2
+    for(int i = 0; i < masterBoardCol*masterBoardRow; i++) {
+      printf("%d ", masterBoard[i].numFox);
+      if((i + 1) % (masterBoardCol) == 0)
         printf("\n");
     }
 
@@ -152,131 +133,142 @@ void finalizeBoard() {
 }
 
 void initializeBoard(int argc, char** argv) {
-  int* curLoopNeighbors;
-  int curLoopBoard_Size;
-  char* curLoopBoard;
+  int* neighbors;
+  int currentBoardSize;
+  struct pt* currentBoard; // 2
   int l;
-  int numberOfProcessors;
+  int numProcessors;
 
   parseFile(argc, argv);
+  partitions = generateBoard(masterBoardCol, masterBoardRow, &numPartitions);
+  MPI_Comm_size(MPI_COMM_WORLD, &numProcessors);
+  printf("Forcing %d partitions\n", numPartitions);
+  numMalloc = numPartitions;
+  allocatedMemory = malloc(sizeof(struct pt*)*(numMalloc+8)); // 2
 
-  partitionArray = generateBoard(masterBoard_columns, masterBoard_rows, &actualPartitions);
-
-  MPI_Comm_size(MPI_COMM_WORLD, &numberOfProcessors);
-
-  printf("Forcing %d partitions\n", actualPartitions);
-
-  numberOfMemoryAllocations = actualPartitions;
-  // TODO: change to struct pointers.
-  allocatedMemory = malloc(sizeof(char*)*(numberOfMemoryAllocations+8));
-
-  for(int i = 0; i < actualPartitions; i++) {
-    // TODO: change neighbor sturcture.
-    curLoopNeighbors = neighborList(i);
-    MPI_Isend(&partitionArray[i], sizeof(struct partition), MPI_BYTE, i, BOUNDS_MESSAGE, MPI_COMM_WORLD, &lastRequest);
-    MPI_Isend(curLoopNeighbors, 4, MPI_INT, i, NEIGHBORLIST_MESSAGE, MPI_COMM_WORLD, &lastRequest); // 1
-
-    curLoopBoard_Size = (partitionArray[i].lengthX+4)*(partitionArray[i].lengthY+4);
-    curLoopBoard = malloc(sizeof(char) *curLoopBoard_Size);
+  for(int i = 0; i < numPartitions; i++) {
+    neighbors = neighborList(i);
+    MPI_Isend(&partitions[i], sizeof(struct partition), MPI_BYTE, i, BOUNDS_MESSAGE, MPI_COMM_WORLD, &lastRequest);
+    MPI_Isend(neighbors, 4, MPI_INT, i, NEIGHBORLIST_MESSAGE, MPI_COMM_WORLD, &lastRequest); // 1
+    currentBoardSize = (partitions[i].lengthX+4)*(partitions[i].lengthY+4);
+    currentBoard = malloc(sizeof(struct pt) *currentBoardSize);
 
     l = 0;
-
-    for(int k = partitionArray[i].startY-2; k <= (partitionArray[i].startY+partitionArray[i].lengthY+1); k++) { // 1
-      for(int j = partitionArray[i].startX-2; j <= (partitionArray[i].startX+partitionArray[i].lengthX+1); j++) {
-        if((k<0)||(j<0)||(k>=masterBoard_rows)||(j>=masterBoard_columns))
-          curLoopBoard[l++] = 0; // boundary
-        else
-          curLoopBoard[l++] = masterBoard[j+(k*masterBoard_columns)];
+    for (int k = partitions[i].startY-2; k<=(partitions[i].startY+partitions[i].lengthY+1); k++) { // 1
+      for(int j = partitions[i].startX-2; j<=(partitions[i].startX+partitions[i].lengthX+1); j++) {
+        if((k<0)||(j<0)||(k>=masterBoardRow)||(j>=masterBoardCol)) { // 2
+          currentBoard[l].numFox = 0; // boundary
+          currentBoard[l].numRab = 0;
+          currentBoard[l].numVeg = 0;
+          l++;
+        } else { // 2
+          currentBoard[l].numFox = masterBoard[j+(k*masterBoardCol)].numFox;
+          currentBoard[l].numRab = masterBoard[j+(k*masterBoardCol)].numRab;
+          currentBoard[l].numVeg = masterBoard[j+(k*masterBoardCol)].numVeg;
+          l++;
+        }
       }
     }
 
-    allocatedMemory[i] = curLoopBoard;
-    MPI_Isend(curLoopBoard, curLoopBoard_Size, MPI_CHAR, i, BOARD_MESSAGE, MPI_COMM_WORLD, &lastRequest);
+    allocatedMemory[i] = currentBoard;
+    MPI_Isend(currentBoard, sizeof(struct pt)*currentBoardSize, MPI_BYTE, i, BOARD_MESSAGE, MPI_COMM_WORLD, &lastRequest); // 2
   }
 
-  printf("\nInitial board: \n");
-  for(int i = 0; i < masterBoard_columns * masterBoard_rows; i++) {
-    if(masterBoard[i] == 1)
-      printf("*");
-    else
-      printf(".");
-    if((i + 1) % (masterBoard_columns) == 0)
+  printf("\nInitial board: \n"); // 2
+  for(int i = 0; i < masterBoardCol * masterBoardRow; i++) {
+    printf("%d ", masterBoard[i].numFox);
+    if((i + 1) % (masterBoardCol) == 0)
       printf("\n");
   }
 
-  for (int i = 0; i < numberOfProcessors; i++)
-    MPI_Isend(&actualPartitions, 1, MPI_INT, i, PARTITION_MESSAGE, MPI_COMM_WORLD, &lastRequest);
-  for (int i = 0; i < numberOfProcessors; i++)
+  for (int i = 0; i < numProcessors; i++)
+    MPI_Isend(&numPartitions, 1, MPI_INT, i, PARTITION_MESSAGE, MPI_COMM_WORLD, &lastRequest);
+  for (int i = 0; i < numProcessors; i++)
     MPI_Isend(&numberOfGenerations, 1, MPI_INT, i, GENERATION_MESSAGE, MPI_COMM_WORLD, &lastRequest);
 }
 
 void calculateBoard() {
-  char* memoryArray[4]; // 1
+  int* memoryArray[4]; // 1
   int memoryUsed;
 
-  char* sendEdge;
+  int* sendEdge; // 2
   int sendSize;
   int recvSize;
   int tag;
 
-  char* recvEdge;
+  int* recvEdge; // 2
   int currentNeighbor;
 
   while (numberOfGenerations-- > 0) { // each generation.
     memoryUsed = 0;
 
-    if (identity < actualPartitions) {
+    // TODO: implement calculations and generate a migration array.
+
+    // communication.
+    if (id < numPartitions) {
       for (int j = 0; j < 4; j++) { // 1
         if (myNeighborIDs[j] > -1) {
           switch (j) {
             case 0: // W
-              sendEdge = malloc(2*sizeof(char)*myCoords.lengthY);
+              sendEdge = malloc(3*sizeof(int)*myCoords.lengthY); // 2
               for (int k = 0; k < myCoords.lengthY; k++) {
-                sendEdge[k] = localBoard[(2*myCoords.lengthX+10)+k*(myCoords.lengthX+4)];
+                sendEdge[k] = localBoard[(2*myCoords.lengthX+10)+k*(myCoords.lengthX+4)].numFox; // f
               }
               for (int k = 0; k < myCoords.lengthY; k++) {
-                sendEdge[k+myCoords.lengthY] = localBoard[(2*myCoords.lengthX+11)+k*(myCoords.lengthX+4)];
+                sendEdge[k+myCoords.lengthY] = localBoard[(2*myCoords.lengthX+11)+k*(myCoords.lengthX+4)].numFox; // f
               }
-              sendSize = 2*myCoords.lengthY;
+              for (int k = 0; k < myCoords.lengthY; k++) {
+                sendEdge[k+2*myCoords.lengthY] = localBoard[(2*myCoords.lengthX+11)+k*(myCoords.lengthX+4)].numRab; // r
+              }
+              sendSize = 3*myCoords.lengthY;
               tag = E_UPDATE;
               break;
             case 1: // E
-              sendEdge = malloc(2*sizeof(char)*myCoords.lengthY);
+              sendEdge = malloc(3*sizeof(int)*myCoords.lengthY);
               for (int k = 0; k < myCoords.lengthY; k++) {
-                sendEdge[k] = localBoard[(3*myCoords.lengthX+8)+k*(myCoords.lengthX+4)];
+                sendEdge[k] = localBoard[(3*myCoords.lengthX+8)+k*(myCoords.lengthX+4)].numFox; // f
               }
               for (int k = 0; k < myCoords.lengthY; k++) {
-                sendEdge[k+myCoords.lengthY] = localBoard[(3*myCoords.lengthX+9)+k*(myCoords.lengthX+4)];
+                sendEdge[k+myCoords.lengthY] = localBoard[(3*myCoords.lengthX+8)+k*(myCoords.lengthX+4)].numRab; // r
               }
-              sendSize = 2*myCoords.lengthY;
+              for (int k = 0; k < myCoords.lengthY; k++) {
+                sendEdge[k+2*myCoords.lengthY] = localBoard[(3*myCoords.lengthX+9)+k*(myCoords.lengthX+4)].numFox; // r
+              }
+              sendSize = 3*myCoords.lengthY;
               tag = W_UPDATE;
               break;
-            case 2:
-              sendEdge = malloc(2*sizeof(char)*myCoords.lengthX);
+            case 2: // N
+              sendEdge = malloc(3*sizeof(int)*myCoords.lengthX);
               for (int k = 0; k < myCoords.lengthX; k++) {
-                sendEdge[k] = localBoard[(myCoords.lengthX+4)*2+2+k];
+                sendEdge[k] = localBoard[(myCoords.lengthX+4)*2+2+k].numFox; // f
               }
               for (int k = 0; k < myCoords.lengthX; k++) {
-                sendEdge[k+myCoords.lengthX] = localBoard[(myCoords.lengthX+4)*3+2+k];
+                sendEdge[k+myCoords.lengthX] = localBoard[(myCoords.lengthX+4)*3+2+k].numFox; // f
               }
-              sendSize = 2*myCoords.lengthX;
+              for (int k = 0; k < myCoords.lengthX; k++) {
+                sendEdge[k+2*myCoords.lengthX] = localBoard[(myCoords.lengthX+4)*3+2+k].numRab; // r
+              }
+              sendSize = 3*myCoords.lengthX;
               tag = S_UPDATE;
               break;
-            case 3:
-              sendEdge = malloc(2*sizeof(char)*myCoords.lengthX);
+            case 3: // S
+              sendEdge = malloc(3*sizeof(int)*myCoords.lengthX);
               for (int k = 0; k < myCoords.lengthX; k++) {
-                sendEdge[k] = localBoard[(myCoords.lengthX+4)*myCoords.lengthY+2+k];
+                sendEdge[k] = localBoard[(myCoords.lengthX+4)*myCoords.lengthY+2+k].numFox; // f
               }
               for (int k = 0; k < myCoords.lengthX; k++) {
-                sendEdge[k+myCoords.lengthX] = localBoard[(myCoords.lengthX+4)*(myCoords.lengthY+1)+2+k];
+                sendEdge[k+myCoords.lengthX] = localBoard[(myCoords.lengthX+4)*myCoords.lengthY+2+k].numRab; // r
               }
-              sendSize = 2*myCoords.lengthX;
+              for (int k = 0; k < myCoords.lengthX; k++) {
+                sendEdge[k+2*myCoords.lengthX] = localBoard[(myCoords.lengthX+4)*(myCoords.lengthY+1)+2+k].numFox; // f
+              }
+              sendSize = 3*myCoords.lengthX;
               tag = N_UPDATE;
               break;
           }
 
           memoryArray[memoryUsed++] = sendEdge;
-          MPI_Isend(sendEdge, sendSize, MPI_CHAR, myNeighborIDs[j], tag, MPI_COMM_WORLD, &lastRequest);
+          MPI_Isend(sendEdge, sendSize, MPI_INT, myNeighborIDs[j], tag, MPI_COMM_WORLD, &lastRequest);
         }
       }
 
@@ -286,60 +278,71 @@ void calculateBoard() {
         if (currentNeighbor > -1) {
           switch(j) {
             case 0:
-              recvEdge = malloc(sizeof(char)*2*myCoords.lengthY);
-              recvSize = 2*myCoords.lengthY;
+              recvEdge = malloc(sizeof(int)*3*myCoords.lengthY);
+              recvSize = 3*myCoords.lengthY;
               tag = W_UPDATE;
               break;
             case 1:
-              recvEdge = malloc(sizeof(char)*2*myCoords.lengthY);
-              recvSize = 2*myCoords.lengthY;
+              recvEdge = malloc(sizeof(int)*3*myCoords.lengthY);
+              recvSize = 3*myCoords.lengthY;
               tag = E_UPDATE;
               break;
             case 2:
-              recvEdge = malloc(sizeof(char)*2*myCoords.lengthX);
-              recvSize = 2*myCoords.lengthX;
+              recvEdge = malloc(sizeof(int)*3*myCoords.lengthX);
+              recvSize = 3*myCoords.lengthX;
               tag = N_UPDATE;
               break;
             case 3:
-              recvEdge = malloc(sizeof(char)*2*myCoords.lengthX);
-              recvSize = 2*myCoords.lengthX;
+              recvEdge = malloc(sizeof(int)*3*myCoords.lengthX);
+              recvSize = 3*myCoords.lengthX;
               tag = S_UPDATE;
               break;
           }
 
-          MPI_Recv(recvEdge, recvSize, MPI_CHAR, currentNeighbor, tag, MPI_COMM_WORLD, &lastStatus);
-
+          MPI_Recv(recvEdge, recvSize, MPI_INT, currentNeighbor, tag, MPI_COMM_WORLD, &lastStatus);
           switch(tag) {
-            case N_UPDATE:
-              for (int i = 0; i < myCoords.lengthX; i++) {
-                localBoard[2+i] = recvEdge[i];
-              }
-              for (int i = 0; i < myCoords.lengthX; i++) {
-                localBoard[myCoords.lengthX+6+i] = recvEdge[myCoords.lengthX+i];
-              }
-              break;
             case W_UPDATE:
               for (int i = 0; i < myCoords.lengthY; i++) {
-                localBoard[(2+i)*(myCoords.lengthX+4)] = recvEdge[i];
+                localBoard[(2+i)*(myCoords.lengthX+4)].numFox += recvEdge[i];
               }
               for (int i = 0; i < myCoords.lengthY; i++) {
-                localBoard[(2+i)*(myCoords.lengthX+4)+1] = recvEdge[myCoords.lengthY+i];
+                localBoard[(2+i)*(myCoords.lengthX+4)].numRab += recvEdge[myCoords.lengthY+i];
+              }
+              for (int i = 0; i < myCoords.lengthY; i++) {
+                localBoard[(2+i)*(myCoords.lengthX+4)+1].numFox += recvEdge[2*myCoords.lengthY+i];
               }
               break;
             case E_UPDATE:
               for (int i = 0; i < myCoords.lengthY; i++) {
-                localBoard[(3+i)*(myCoords.lengthX+4)-2] = recvEdge[i];
+                localBoard[(3+i)*(myCoords.lengthX+4)-2].numFox += recvEdge[i];
               }
               for (int i = 0; i < myCoords.lengthY; i++) {
-                localBoard[(3+i)*(myCoords.lengthX+4)-1] = recvEdge[myCoords.lengthY+i];
+                localBoard[(3+i)*(myCoords.lengthX+4)-1].numFox += recvEdge[myCoords.lengthY+i];
+              }
+              for (int i = 0; i < myCoords.lengthY; i++) {
+                localBoard[(3+i)*(myCoords.lengthX+4)-1].numRab += recvEdge[2*myCoords.lengthY+i];
+              }
+              break;
+            case N_UPDATE:
+              for (int i = 0; i < myCoords.lengthX; i++) {
+                localBoard[2+i].numFox += recvEdge[i];
+              }
+              for (int i = 0; i < myCoords.lengthX; i++) {
+                localBoard[2+i].numRab += recvEdge[myCoords.lengthX+i];
+              }
+              for (int i = 0; i < myCoords.lengthX; i++) {
+                localBoard[myCoords.lengthX+6+i].numFox += recvEdge[2*myCoords.lengthX+i];
               }
               break;
             case S_UPDATE:
               for (int i = 0; i < myCoords.lengthX; i++) {
-                localBoard[(myCoords.lengthX+4)*(myCoords.lengthY+2)+2+i] = recvEdge[i];
+                localBoard[(myCoords.lengthX+4)*(myCoords.lengthY+2)+2+i].numFox += recvEdge[i];
               }
               for (int i = 0; i < myCoords.lengthX; i++) {
-                localBoard[(myCoords.lengthX+4)*(myCoords.lengthY+3)+2+i] = recvEdge[myCoords.lengthX+i];
+                localBoard[(myCoords.lengthX+4)*(myCoords.lengthY+3)+2+i].numFox += recvEdge[myCoords.lengthX+i];
+              }
+              for (int i = 0; i < myCoords.lengthX; i++) {
+                localBoard[(myCoords.lengthX+4)*(myCoords.lengthY+3)+2+i].numRab += recvEdge[2*myCoords.lengthX+i];
               }
               break;
           }
@@ -348,15 +351,11 @@ void calculateBoard() {
         }
       }
 
-      for(int j = 0; j < (myCoords.lengthY + 4); j++) { // 1
-        for(int i = 0; i < (myCoords.lengthX + 4); i++) {
-          if(isAlive(i, j))
-            setNextArray(i, j, 1);
-          else
-            setNextArray(i, j, 0);
+      for(int j = 2; j < (myCoords.lengthY + 2); j++) { // 1
+        for(int i = 2; i < (myCoords.lengthX + 2); i++) { // 2
+          setReproduce(i, j, localBoard[i+j*(myCoords.lengthY+4)].numFox, localBoard[i+j*(myCoords.lengthY+4)].numRab, localBoard[i+j*(myCoords.lengthY+4)].numVeg);
         }
       }
-
       swapBoards();
 
       for(int i = 0; i < memoryUsed; i++)
@@ -364,37 +363,36 @@ void calculateBoard() {
     }
     MPI_Barrier(MPI_COMM_WORLD);
   }
-
   MPI_Barrier(MPI_COMM_WORLD);
 
-  if(identity < actualPartitions)
-    MPI_Isend(localBoard, (myCoords.lengthX+4)*(myCoords.lengthY+4), MPI_CHAR, 0, BOARD_MESSAGE, MPI_COMM_WORLD, &lastRequest); // 1
+  if(id < numPartitions)
+    MPI_Isend(localBoard, sizeof(struct pt)*(myCoords.lengthX+4)*(myCoords.lengthY+4), MPI_BYTE, 0, BOARD_MESSAGE, MPI_COMM_WORLD, &lastRequest); // 1 // 2
 
   MPI_Barrier(MPI_COMM_WORLD);
 }
 
-bool isAlive(int x, int y) {
-  bool alive;
-  int numNeighbors;
-  alive = false;
-  numNeighbors = 0;
+// bool isAlive(int x, int y) {
+//   bool alive;
+//   int numNeighbors;
+//   alive = false;
+//   numNeighbors = 0;
 
-  for(int j = -1; j <= 1; j++)
-    for(int i = -1; i <= 1; i++) {
-      if(!(((x+i)<0) || ((x+i)>=(myCoords.lengthX+4)) || ((y+j)<0) || ((y+j)>=(myCoords.lengthY+4)) || (i==0 && j==0))) // 1
-        numNeighbors += getArray(x + i, y + j);
-    }
+//   for(int j = -1; j <= 1; j++)
+//     for(int i = -1; i <= 1; i++) {
+//       if(!(((x+i)<0) || ((x+i)>=(myCoords.lengthX+4)) || ((y+j)<0) || ((y+j)>=(myCoords.lengthY+4)) || (i==0 && j==0))) // 1
+//         numNeighbors += getArray(x + i, y + j);
+//     }
 
-  if((getArray(x,y) == 1) && (numNeighbors == 2 || numNeighbors == 3))
-    alive = true;
-  else if((getArray(x,y) == 0) && (numNeighbors == 3))
-    alive = true;
+//   if((getArray(x,y) == 1) && (numNeighbors == 2 || numNeighbors == 3))
+//     alive = true;
+//   else if((getArray(x,y) == 0) && (numNeighbors == 3))
+//     alive = true;
 
-  return alive;
-}
+//   return alive;
+// }
 
 void swapBoards(void) {
-  char* tempBoard;
+  struct pt* tempBoard; // 2
   tempBoard = localBoard;
   localBoard = nextGenBoard;
   nextGenBoard = tempBoard;
@@ -402,38 +400,35 @@ void swapBoards(void) {
 
 void initMPI(int argc, char ** argv) {
   MPI_Init(&argc, &argv);
-  MPI_Comm_rank(MPI_COMM_WORLD, &identity);
+  MPI_Comm_rank(MPI_COMM_WORLD, &id);
 
-  numberOfMemoryAllocations = 0; // garbage colllection
+  numMalloc = 0; // garbage colllection
 
-  if (!identity) {
-    MPI_Comm_size(MPI_COMM_WORLD, &actualPartitions);
+  if (!id) {
+    MPI_Comm_size(MPI_COMM_WORLD, &numPartitions);
     initializeBoard(argc, argv);
   }
   else
-    allocatedMemory = malloc(sizeof(char*) * 8);
+    allocatedMemory = malloc(sizeof(struct pt*) * 8);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
-  MPI_Recv(&actualPartitions, 1, MPI_INT, 0, PARTITION_MESSAGE, MPI_COMM_WORLD, &lastStatus);
+  MPI_Recv(&numPartitions, 1, MPI_INT, 0, PARTITION_MESSAGE, MPI_COMM_WORLD, &lastStatus);
   MPI_Recv(&numberOfGenerations, 1, MPI_INT, 0, GENERATION_MESSAGE, MPI_COMM_WORLD, &lastStatus);
 
-  if(identity < actualPartitions) {
+  if(id < numPartitions) {
     MPI_Recv(&myCoords, sizeof(struct partition), MPI_BYTE, 0, BOUNDS_MESSAGE, MPI_COMM_WORLD, &lastStatus);
     MPI_Recv(myNeighborIDs, 4, MPI_INT, 0, NEIGHBORLIST_MESSAGE, MPI_COMM_WORLD, &lastStatus); // 1
-    localBoard_Size = (myCoords.lengthX+4)*(myCoords.lengthY+4); // 1
-    localBoard = malloc(sizeof(char) * localBoard_Size);
-    MPI_Recv(localBoard, localBoard_Size, MPI_CHAR, 0, BOARD_MESSAGE, MPI_COMM_WORLD, &lastStatus);
-    nextGenBoard = malloc(sizeof(char) * localBoard_Size);
+    localBoardSize = (myCoords.lengthX+4)*(myCoords.lengthY+4); // 1
+    localBoard = malloc(sizeof(struct pt)*localBoardSize);
+    MPI_Recv(localBoard, sizeof(struct pt)*localBoardSize, MPI_BYTE, 0, BOARD_MESSAGE, MPI_COMM_WORLD, &lastStatus);
+    nextGenBoard = malloc(sizeof(struct pt)*localBoardSize);
   }
 }
 
 int main(int argc, char ** argv) {
   initMPI(argc, argv);
-
   calculateBoard();
-
   finalizeBoard();
   return 0;
 }
-

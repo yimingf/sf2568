@@ -12,7 +12,7 @@ struct pt {
   int numRab; // rabbits
   int numVeg; // vegetation.
 };
-struct partition * generateBoard(int width, int length, int* processes);
-int * neighborList(int);
+struct partition* generateBoard (int width, int length, int* processes);
+int* neighborList (int);
 
 #endif
