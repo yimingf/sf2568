@@ -1,13 +1,15 @@
 #include <stdio.h>    
-
-struct pt {
-  int numFox; // foxes
-  int numRab; // rabbits
-  int numVeg; // vegetation.
-};
+#include <stdlib.h>
 
 int main() {
-  struct pt p;      
-  printf("%d %d %d\n", sizeof(p.numFox), sizeof(p), sizeof(char));
+  int i = 0;
+  while(1) {
+    int j = rand()%1460;
+    if (j == 0) {
+      printf("%d\n", i);
+      return(0);
+    }
+    i++;
+  }
   return(0);
 }

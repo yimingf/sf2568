@@ -2,28 +2,99 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <mpi.h>
+#include <math.h>
+
 #include "Geometry.h"
 
-int id;
-int numPartitions;
+int id, numIter, numPartitions;
 struct partition* partitions;
-struct pt* myBoard; // 2
-struct pt* nextBoard;
-struct pt* masterBoard;
-
-int masterBoardCol;
-int masterBoardRow;
+int myBoardSize, myNeighborIDs[4]; // 1
+struct pt *myBoard, *nextBoard, *masterBoard;
+int masterBoardCol, masterBoardRow;
 struct partition conf;
-
-int numIter;
-int myNeighborIDs[4]; // 1
 MPI_Status lastStatus;
 MPI_Request lastRequest;
-
-int myBoardSize;
-
-struct pt** allocatedMemory; // 2
+struct pt **allocatedMemory; // 2
 int numMalloc;
+
+int reproduceRateRabbit = 63;
+int reproduceRateFox = 180;
+double growthRateVeg = 1.1;
+int lifeFox = 1460;
+
+int birthRabbit (int r, int v) {
+  if (r<2) {
+    return 0;
+  } else if (v<200) {
+    if (r>700) {
+      return 2;
+    } else {
+      return 3;
+    }
+  } else if (v<500) {
+    if (r>700) {
+      return 3;
+    } else {
+      return 4;
+    }
+  } else if (v<800) {
+    if (r>700) {
+      return 4;
+    } else if (r>200) {
+      return 5;
+    } else {
+      return 6;
+    }
+  } else {
+    if (r>5000) {
+      return 5;
+    } else if (r>700) {
+      return 7;
+    } else if (r>200) {
+      return 8;
+    } else {
+      return 9;
+    }
+  }
+}
+
+int birthFox (int f, int r) {
+  if (f<2) {
+    return 0;
+  } else if (r<3) {
+    if (f>100) {
+      return 0;
+    } else if (f>50) {
+      return 1;
+    } else {
+      return 2;
+    }
+  } else if (r<10) {
+    if (f>100) {
+      return 1;
+    } else if (f>50) {
+      return 2;
+    } else {
+      return 3;
+    }
+  } else if (r<40) {
+    if (f>100) {
+      return 2;
+    } else if (f>10) {
+      return 3;
+    } else {
+      return 4;
+    }
+  } else {
+    if (f>50) {
+      return 3;
+    } else if (f>10) {
+      return 4;
+    } else {
+      return 5;
+    }
+  }
+}
 
 typedef enum {
   N_UPDATE,
@@ -37,22 +108,21 @@ typedef enum {
   PARTITION_MESSAGE
 } tagType;
 
-bool isAlive(int x, int y);
 void swapBoards();
 
 struct pt getArray(int x, int y) { // 2
-  return myBoard[x+y*conf.lengthX];
+  return myBoard[x+y*conf.x1];
 }
 
-void setReproduce(int x, int y, int f, int r, int v) { // 2
-  nextBoard[x+y*conf.lengthX].numFox = f;
-  nextBoard[x+y*conf.lengthX].numRab = r;
-  nextBoard[x+y*conf.lengthX].numVeg = v;
+void setBeforeMig(int x, int y, int f, int r, int v) { // 2
+  nextBoard[x+y*conf.x1].numFox = f;
+  nextBoard[x+y*conf.x1].numRab = r;
+  nextBoard[x+y*conf.x1].numVeg = v;
 }
 
-void setMigration(int x, int y, int f, int r) { // 2
-  nextBoard[x+y*conf.lengthX].numFox += f;
-  nextBoard[x+y*conf.lengthX].numRab += r;
+void setMig(int x, int y, int f, int r) { // 2
+  nextBoard[x+y*conf.x1].numFox += f;
+  nextBoard[x+y*conf.x1].numRab += r;
 }
 
 void freeMemory() {
@@ -71,7 +141,7 @@ void parseFile(int argc, char** argv) {
 
   FILE * filePtr = fopen(argv[1], "r");
   if(filePtr == NULL) {
-    printf("Could not find file! Please restart and retry.");
+    printf("file not found");
     exit(1);
   }
 
@@ -102,22 +172,22 @@ void finalizeBoard() {
     struct pt* incomingBoard; // 2
 
     for(int i = 0; i < numPartitions; i++) {
-      size = partitions[i].lengthX*partitions[i].lengthY;
+      size = partitions[i].x1*partitions[i].y1;
       incomingBoard = malloc(sizeof(struct pt)*size); // 2
       MPI_Recv(incomingBoard, sizeof(struct pt)*size, MPI_BYTE, i, BOARD_MESSAGE, MPI_COMM_WORLD, &lastStatus);
 
-      for(int k = 0; k < partitions[i].lengthY; k++) {
-        for(int j = 0; j < partitions[i].lengthX; j++) {
-          int equivLocation = j+k*partitions[i].lengthX; // 1
-          masterBoard[j+partitions[i].startX+((k+partitions[i].startY)*masterBoardCol)] = incomingBoard[equivLocation];
+      for(int k = 0; k < partitions[i].y1; k++) {
+        for(int j = 0; j < partitions[i].x1; j++) {
+          int equivLocation = j+k*partitions[i].x1; // 1
+          masterBoard[j+partitions[i].x0+((k+partitions[i].y0)*masterBoardCol)] = incomingBoard[equivLocation];
         }
       }
       free(incomingBoard);
     }
 
-    printf("\nFinal board confuration: \n"); // 2
+    printf("\nFinal board config:\n"); // 2
     for(int i = 0; i < masterBoardCol*masterBoardRow; i++) {
-      printf("%d ", masterBoard[i].numFox);
+      printf("%d ", masterBoard[i].numRab);
       if((i + 1) % (masterBoardCol) == 0)
         printf("\n");
     }
@@ -150,12 +220,12 @@ void initializeBoard(int argc, char** argv) {
     neighbors = neighborList(i);
     MPI_Isend(&partitions[i], sizeof(struct partition), MPI_BYTE, i, BOUNDS_MESSAGE, MPI_COMM_WORLD, &lastRequest);
     MPI_Isend(neighbors, 4, MPI_INT, i, NEIGHBORLIST_MESSAGE, MPI_COMM_WORLD, &lastRequest);
-    currentBoardSize = partitions[i].lengthX*partitions[i].lengthY;
+    currentBoardSize = partitions[i].x1*partitions[i].y1;
     currentBoard = malloc(sizeof(struct pt) *currentBoardSize);
 
     l = 0;
-    for (int k = partitions[i].startY; k < partitions[i].startY+partitions[i].lengthY; k++) {
-      for(int j = partitions[i].startX; j < partitions[i].startX+partitions[i].lengthX; j++) {
+    for (int k = partitions[i].y0; k < partitions[i].y0+partitions[i].y1; k++) {
+      for(int j = partitions[i].x0; j < partitions[i].x0+partitions[i].x1; j++) {
         currentBoard[l].numFox = masterBoard[j+k*masterBoardCol].numFox;
         currentBoard[l].numRab = masterBoard[j+k*masterBoardCol].numRab;
         currentBoard[l].numVeg = masterBoard[j+k*masterBoardCol].numVeg;
@@ -181,21 +251,148 @@ void initializeBoard(int argc, char** argv) {
 }
 
 void calculateBoard() {
-  int* memoryArray[4]; // 1
-  int memoryUsed;
+  int *memoryArray[4], memoryUsed;
+  int *sendEdge, sendSize, recvSize, tag;
 
-  int* sendEdge; // 2
-  int sendSize;
-  int recvSize;
-  int tag;
-
-  int* recvEdge; // 2
+  int *recvEdge; // 2
   int currentNeighbor;
 
-  while (numIter-- > 0) { // each generation.
+  int f, r, v, f_p, r_p, f_, r_;
+  int lifeRabbit;
+  int *migrationFox, *migrationRabbit;
+  bool birthFlagRabbit;
+  bool birthFlagFox;
+
+  for (int day = 0; day<numIter; day++) { // each generation.
     memoryUsed = 0;
 
-    // TODO: implement calculations and generate a migration array.
+    birthFlagRabbit = false;
+    birthFlagFox = false;
+
+    // 1. birthing day of rabbits
+    if (day%reproduceRateRabbit == 0) {
+      birthFlagRabbit = true;
+    }
+    // 2. birthing day of foxes.
+    if (day%reproduceRateFox == 0) {
+      birthFlagFox = true;
+    }
+
+    for(int j = 0; j < conf.y1; j++) { // before migration.
+      for(int i = 0; i < conf.x1; i++) {
+        f = myBoard[i+j*conf.x1].numFox;
+        r = myBoard[i+j*conf.x1].numRab;
+        v = myBoard[i+j*conf.x1].numVeg;
+
+        if (birthFlagRabbit) { // 1.
+          r += birthRabbit(r, v);
+        }
+        if (birthFlagFox) { // 2.
+          f += birthFox(f, r);
+        }
+
+        // 3. vegetation.
+        v = (int)(floor(growthRateVeg*v))-r;
+        if (v<100) {
+          v = 100;
+        }
+        if (v>1000) {
+          v = 1000;
+        }
+
+        // 4. predator (foxes)
+        if (v<600) {
+          r_p = (int)(floor(f*4/7));
+          if (r_p>r) {
+            r_p = (int)(floor(f*2/7));
+          }
+        } else {
+          r_p = (int)(floor(f*2/7));
+        }
+        if (r_p>r) {
+          r = 0;
+          f = (int)(floor(0.9*f)); // starve
+        } else {
+          r -= r_p;
+        }
+        // 5. foxes' natural death
+        if (f>0) {
+          if (rand()%lifeFox == 0) {
+            f--;
+          }
+        }
+
+        // 6. rabbits' starve and natural death
+        if (r>0) {
+          if (v>350) {
+            lifeRabbit = 216;
+          } else if (v>250) {
+            lifeRabbit = 144;
+          } else if (v>150) {
+            lifeRabbit = 72;
+          } else {
+            lifeRabbit = 36;
+          }
+
+          if (rand()%lifeRabbit == 0) {
+            r--;
+          }
+        }
+        setBeforeMig(i, j, f, r, v);
+      }
+    }
+
+    migrationRabbit = malloc(sizeof(int)*(conf.x1+2)*(conf.y1+2));
+    migrationFox = malloc(sizeof(int)*(conf.x1+4)*(conf.x1+4));
+
+    for (int j = 0; j<conf.y1; j++) {
+      for (int i = 0; i<conf.x1; i++) {
+        f = myBoard[i+j*conf.x1].numFox;
+        r = myBoard[i+j*conf.x1].numRab;
+
+        f_p = r_p = 0;
+        r_p = ((int)floor(r*0.1));
+        if (r_p != 0) {
+          r_p = rand()%r_p;
+        }
+        f_p = ((int)floor(f*0.12));
+        if (f_p != 0) {
+          f_p = rand()%f_p;
+        }
+
+        int foo = 0;
+        for (int k = -2; k<3; k++) { // fox
+          if (k!=0) {
+            if ((conf.x0+i+k>=0) && (conf.x0+i+k<masterBoardCol)) { // x
+              migrationFox[(i+2+k)+(j+2)*(conf.x1+4)] += f_p;
+              foo++;
+            }
+            if ((conf.y0+i+k>=0) && (conf.y0+i+k<masterBoardRow)) { // y
+              migrationFox[(i+2)+(j+2+k)*(conf.x1+4)] += f_p;
+              foo++;
+            }
+          }
+        }
+        f_p *= (-foo);
+
+        foo = 0;
+        for (int k = -1; k<2; k++) { // rabbit
+          if (k!=0) {
+            if ((conf.x0+i+k>=0) && (conf.x0+i+k<masterBoardCol)) { // x
+              migrationRabbit[(i+1+k)+(j+1)*(conf.x1+2)] += r_p;
+              foo++;
+            }
+            if ((conf.y0+i+k>=0) && (conf.y0+i+k<masterBoardRow)) { // y
+              migrationRabbit[(i+1)+(j+1+k)*(conf.x1+2)] += r_p;
+              foo++;
+            }
+          }
+        }
+        r_p *= (-foo);
+        setMig(i, j, f_p, r_p);
+
+      }
+    }
 
     // communication.
     if (id < numPartitions) {
@@ -203,59 +400,59 @@ void calculateBoard() {
         if (myNeighborIDs[j] > -1) {
           switch (j) {
             case 0: // W
-              sendEdge = malloc(3*sizeof(int)*conf.lengthY); // 2
-              for (int k = 0; k < conf.lengthY; k++) {
-                sendEdge[k] = myBoard[k*conf.lengthX].numFox; // f
+              sendEdge = malloc(3*sizeof(int)*conf.y1); // 2
+              for (int k = 0; k < conf.y1; k++) {
+                sendEdge[k] = migrationFox[(k+2)*(conf.x1+4)]; // f
               }
-              for (int k = 0; k < conf.lengthY; k++) {
-                sendEdge[k+conf.lengthY] = myBoard[1+k*conf.lengthX].numFox; // f
+              for (int k = 0; k < conf.y1; k++) {
+                sendEdge[k+conf.y1] = migrationFox[1+(k+2)*(conf.x1+4)]; // f
               }
-              for (int k = 0; k < conf.lengthY; k++) {
-                sendEdge[k+2*conf.lengthY] = myBoard[1+k*conf.lengthX].numRab; // r
+              for (int k = 0; k < conf.y1; k++) {
+                sendEdge[k+2*conf.y1] = migrationRabbit[(k+1)*(conf.x1+2)]; // r
               }
-              sendSize = 3*conf.lengthY;
+              sendSize = 3*conf.y1;
               tag = E_UPDATE;
               break;
             case 1: // E
-              sendEdge = malloc(3*sizeof(int)*conf.lengthY);
-              for (int k = 0; k < conf.lengthY; k++) {
-                sendEdge[k] = myBoard[(k+1)*conf.lengthX-2].numFox;
+              sendEdge = malloc(3*sizeof(int)*conf.y1);
+              for (int k = 0; k < conf.y1; k++) {
+                sendEdge[k] = migrationFox[(k+3)*(conf.x1+4)-2];
               }
-              for (int k = 0; k < conf.lengthY; k++) {
-                sendEdge[k+conf.lengthY] = myBoard[(k+1)*conf.lengthX-2].numRab; // r
+              for (int k = 0; k < conf.y1; k++) {
+                sendEdge[k+conf.y1] = migrationRabbit[(k+2)*(conf.x1+2)-1]; // r
               }
-              for (int k = 0; k < conf.lengthY; k++) {
-                sendEdge[k+2*conf.lengthY] = myBoard[(k+1)*conf.lengthX-1].numFox; // r
+              for (int k = 0; k < conf.y1; k++) {
+                sendEdge[k+2*conf.y1] = migrationFox[(k+3)*(conf.x1+4)-2]; // f
               }
-              sendSize = 3*conf.lengthY;
+              sendSize = 3*conf.y1;
               tag = W_UPDATE;
               break;
             case 2: // N
-              sendEdge = malloc(3*sizeof(int)*conf.lengthX);
-              for (int k = 0; k < conf.lengthX; k++) {
-                sendEdge[k] = myBoard[k].numFox; // f
+              sendEdge = malloc(3*sizeof(int)*conf.x1);
+              for (int k = 0; k < conf.x1; k++) {
+                sendEdge[k] = migrationFox[k+2]; // f
               }
-              for (int k = 0; k < conf.lengthX; k++) {
-                sendEdge[k+conf.lengthX] = myBoard[conf.lengthX+k].numFox; // f
+              for (int k = 0; k < conf.x1; k++) {
+                sendEdge[k+conf.x1] = migrationFox[k+6+conf.x1]; // f
               }
-              for (int k = 0; k < conf.lengthX; k++) {
-                sendEdge[k+2*conf.lengthX] = myBoard[conf.lengthX+k].numRab; // r
+              for (int k = 0; k < conf.x1; k++) {
+                sendEdge[k+2*conf.x1] = migrationRabbit[k+1]; // r
               }
-              sendSize = 3*conf.lengthX;
+              sendSize = 3*conf.x1;
               tag = S_UPDATE;
               break;
             case 3: // S
-              sendEdge = malloc(3*sizeof(int)*conf.lengthX);
-              for (int k = 0; k < conf.lengthX; k++) {
-                sendEdge[k] = myBoard[(conf.lengthY-2)*conf.lengthX+k].numFox; // f
+              sendEdge = malloc(3*sizeof(int)*conf.x1);
+              for (int k = 0; k < conf.x1; k++) {
+                sendEdge[k] = migrationFox[(k+2)+(conf.y1+2)*(conf.x1+4)]; // f
               }
-              for (int k = 0; k < conf.lengthX; k++) {
-                sendEdge[k+conf.lengthX] = myBoard[(conf.lengthY-2)*conf.lengthX+k].numRab; // r
+              for (int k = 0; k < conf.x1; k++) {
+                sendEdge[k+conf.x1] = migrationRabbit[(k+1)+(conf.y1+1)*(conf.x1+2)]; // r
               }
-              for (int k = 0; k < conf.lengthX; k++) {
-                sendEdge[k+2*conf.lengthX] = myBoard[(conf.lengthY-1)*conf.lengthX+k].numFox; // f
+              for (int k = 0; k < conf.x1; k++) {
+                sendEdge[k+2*conf.x1] = migrationFox[(k+2)+(conf.y1+3)*(conf.x1+4)]; // f
               }
-              sendSize = 3*conf.lengthX;
+              sendSize = 3*conf.x1;
               tag = N_UPDATE;
               break;
           }
@@ -271,23 +468,23 @@ void calculateBoard() {
         if (currentNeighbor > -1) {
           switch(j) {
             case 0:
-              recvEdge = malloc(sizeof(int)*3*conf.lengthY);
-              recvSize = 3*conf.lengthY;
+              recvEdge = malloc(sizeof(int)*3*conf.y1);
+              recvSize = 3*conf.y1;
               tag = W_UPDATE;
               break;
             case 1:
-              recvEdge = malloc(sizeof(int)*3*conf.lengthY);
-              recvSize = 3*conf.lengthY;
+              recvEdge = malloc(sizeof(int)*3*conf.y1);
+              recvSize = 3*conf.y1;
               tag = E_UPDATE;
               break;
             case 2:
-              recvEdge = malloc(sizeof(int)*3*conf.lengthX);
-              recvSize = 3*conf.lengthX;
+              recvEdge = malloc(sizeof(int)*3*conf.x1);
+              recvSize = 3*conf.x1;
               tag = N_UPDATE;
               break;
             case 3:
-              recvEdge = malloc(sizeof(int)*3*conf.lengthX);
-              recvSize = 3*conf.lengthX;
+              recvEdge = malloc(sizeof(int)*3*conf.x1);
+              recvSize = 3*conf.x1;
               tag = S_UPDATE;
               break;
           }
@@ -295,47 +492,47 @@ void calculateBoard() {
           MPI_Recv(recvEdge, recvSize, MPI_INT, currentNeighbor, tag, MPI_COMM_WORLD, &lastStatus);
           switch(tag) {
             case W_UPDATE:
-              for (int i = 0; i < conf.lengthY; i++) {
-                myBoard[i*conf.lengthX].numFox += recvEdge[i];
+              for (int i = 0; i < conf.y1; i++) {
+                migrationFox[2+i*(conf.x1+4)] += recvEdge[i];
               }
-              for (int i = 0; i < conf.lengthY; i++) {
-                myBoard[i*conf.lengthX].numRab += recvEdge[conf.lengthY+i];
+              for (int i = 0; i < conf.y1; i++) {
+                migrationRabbit[1+i*(conf.x1+2)] += recvEdge[conf.y1+i];
               }
-              for (int i = 0; i < conf.lengthY; i++) {
-                myBoard[1+i*conf.lengthX].numFox += recvEdge[2*conf.lengthY+i];
+              for (int i = 0; i < conf.y1; i++) {
+                migrationFox[3+i*(conf.x1+4)] += recvEdge[2*conf.y1+i];
               }
               break;
             case E_UPDATE:
-              for (int i = 0; i < conf.lengthY; i++) {
-                myBoard[(i+1)*conf.lengthX-2].numFox += recvEdge[i];
+              for (int i = 0; i < conf.y1; i++) {
+                migrationFox[(i+3)*conf.x1-4] += recvEdge[i];
               }
-              for (int i = 0; i < conf.lengthY; i++) {
-                myBoard[(i+1)*conf.lengthX-1].numFox += recvEdge[conf.lengthY+i];
+              for (int i = 0; i < conf.y1; i++) {
+                migrationFox[(i+3)*conf.x1-3] += recvEdge[conf.y1+i];
               }
-              for (int i = 0; i < conf.lengthY; i++) {
-                myBoard[(i+1)*conf.lengthX-1].numRab += recvEdge[2*conf.lengthY+i];
+              for (int i = 0; i < conf.y1; i++) {
+                migrationRabbit[(i+2)*conf.x1-2] += recvEdge[2*conf.y1+i];
               }
               break;
             case N_UPDATE:
-              for (int i = 0; i < conf.lengthX; i++) {
-                myBoard[i].numFox += recvEdge[i];
+              for (int i = 0; i < conf.x1; i++) {
+                migrationFox[i+2+2*(conf.x1+4)] += recvEdge[i];
               }
-              for (int i = 0; i < conf.lengthX; i++) {
-                myBoard[i].numRab += recvEdge[conf.lengthX+i];
+              for (int i = 0; i < conf.x1; i++) {
+                migrationRabbit[i+1+(conf.x1+2)] += recvEdge[conf.x1+i];
               }
-              for (int i = 0; i < conf.lengthX; i++) {
-                myBoard[i+conf.lengthX].numFox += recvEdge[2*conf.lengthX+i];
+              for (int i = 0; i < conf.x1; i++) {
+                migrationFox[i+2+3*(conf.x1+4)] += recvEdge[2*conf.x1+i];
               }
               break;
             case S_UPDATE:
-              for (int i = 0; i < conf.lengthX; i++) {
-                myBoard[(conf.lengthY-2)*conf.lengthX+i].numFox += recvEdge[i];
+              for (int i = 0; i < conf.x1; i++) {
+                migrationFox[i+2+conf.y1*(conf.x1+4)] += recvEdge[i];
               }
-              for (int i = 0; i < conf.lengthX; i++) {
-                myBoard[(conf.lengthY-1)*conf.lengthX+i].numFox += recvEdge[conf.lengthX+i];
+              for (int i = 0; i < conf.x1; i++) {
+                migrationFox[i+2+(conf.y1+1)*(conf.x1+4)] += recvEdge[conf.x1+i];
               }
-              for (int i = 0; i < conf.lengthX; i++) {
-                myBoard[(conf.lengthY-1)*conf.lengthX+i].numRab += recvEdge[2*conf.lengthX+i];
+              for (int i = 0; i < conf.x1; i++) {
+                migrationRabbit[i+1+conf.y1*(conf.x1+2)] += recvEdge[2*conf.x1+i];
               }
               break;
           }
@@ -343,46 +540,23 @@ void calculateBoard() {
           free(recvEdge);
         }
       }
-
-      for(int j = 0; j < conf.lengthY; j++) { // 1
-        for(int i = 0; i < conf.lengthX; i++) { // 2
-          setReproduce(i, j, myBoard[i+j*conf.lengthX].numFox, myBoard[i+j*conf.lengthX].numRab, myBoard[i+j*conf.lengthX].numVeg);
-        }
-      }
       swapBoards();
 
-      for(int i = 0; i < memoryUsed; i++)
+      free(migrationFox);
+      free(migrationRabbit);
+      for(int i = 0; i < memoryUsed; i++) {
         free(memoryArray[i]);
+      }
     }
     MPI_Barrier(MPI_COMM_WORLD);
   }
   MPI_Barrier(MPI_COMM_WORLD);
 
   if(id < numPartitions)
-    MPI_Isend(myBoard, sizeof(struct pt)*conf.lengthX*conf.lengthY, MPI_BYTE, 0, BOARD_MESSAGE, MPI_COMM_WORLD, &lastRequest); // 1 // 2
+    MPI_Isend(myBoard, sizeof(struct pt)*conf.x1*conf.y1, MPI_BYTE, 0, BOARD_MESSAGE, MPI_COMM_WORLD, &lastRequest); // 1 // 2
 
   MPI_Barrier(MPI_COMM_WORLD);
 }
-
-// bool isAlive(int x, int y) {
-//   bool alive;
-//   int numNeighbors;
-//   alive = false;
-//   numNeighbors = 0;
-
-//   for(int j = -1; j <= 1; j++)
-//     for(int i = -1; i <= 1; i++) {
-//       if(!(((x+i)<0) || ((x+i)>=(conf.lengthX+4)) || ((y+j)<0) || ((y+j)>=(conf.lengthY+4)) || (i==0 && j==0))) // 1
-//         numNeighbors += getArray(x + i, y + j);
-//     }
-
-//   if((getArray(x,y) == 1) && (numNeighbors == 2 || numNeighbors == 3))
-//     alive = true;
-//   else if((getArray(x,y) == 0) && (numNeighbors == 3))
-//     alive = true;
-
-//   return alive;
-// }
 
 void swapBoards(void) {
   struct pt* tempBoard; // 2
@@ -412,7 +586,7 @@ void initMPI(int argc, char ** argv) {
   if(id < numPartitions) {
     MPI_Recv(&conf, sizeof(struct partition), MPI_BYTE, 0, BOUNDS_MESSAGE, MPI_COMM_WORLD, &lastStatus);
     MPI_Recv(myNeighborIDs, 4, MPI_INT, 0, NEIGHBORLIST_MESSAGE, MPI_COMM_WORLD, &lastStatus); // 1
-    myBoardSize = conf.lengthX*conf.lengthY; // 1
+    myBoardSize = conf.x1*conf.y1; // 1
     myBoard = malloc(sizeof(struct pt)*myBoardSize);
     MPI_Recv(myBoard, sizeof(struct pt)*myBoardSize, MPI_BYTE, 0, BOARD_MESSAGE, MPI_COMM_WORLD, &lastStatus);
     nextBoard = malloc(sizeof(struct pt)*myBoardSize);

@@ -3,22 +3,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <math.h>
 
-int widthX; //Width of board
-int widthY; //Length of board
-
-int smallestSide;   //Smallest side of the board
-int largestSide;    //Largest side of the board (not used)
-
-int numXDivisions;  //Number of partitions along the x axis (typical case)
-int numYDivisions;  //Number of partitions along the y axis (typical case)
-
-int extraPartitions; // Number of extra partitions need to be dealt with after factoring
-bool isSmallestSideVertical;    //Which axis is the smallest side
-int numberOfPartitions; //Number of actual partitions
+int widthX;
+int widthY;
+int smallestSide;
+int largestSide;
+int numXDivisions;
+int numYDivisions;
+int extraPartitions;
+bool isSmallestSideVertical;
+int numParts;
 struct partition* partitions;
 
-void compareSides (void);    //Function prototyping
+void compareSides (void);
 
 void setDivisions (int factor1, int factor2) {
   bool inPlace;
@@ -42,7 +40,6 @@ void setDivisions (int factor1, int factor2) {
   numYDivisions = factor2;
 }
 
-/* Given the number of partitions, determines the two closest factors after partition size is (potentially) massaged upwards to create a nicely divisible partition number */
 void determineFactors (void) {
   int i;
   int root;
@@ -50,8 +47,7 @@ void determineFactors (void) {
   int highestFactor;
   int otherFactor;
 
-  total = numberOfPartitions + extraPartitions;
-
+  total = numParts + extraPartitions;
   root = sqrt(total);
 
   for(i = 1; i <= root; i++)
@@ -60,21 +56,20 @@ void determineFactors (void) {
 
   otherFactor = total / highestFactor;
 
-  //If these factors are unable to map to the sides
-  if((highestFactor > largestSide || otherFactor > smallestSide) && (highestFactor > smallestSide || otherFactor > largestSide)) {
+  if ((highestFactor > largestSide || otherFactor > smallestSide) && (highestFactor > smallestSide || otherFactor > largestSide)) {
     if(smallestSide > total/smallestSide)
       setDivisions(smallestSide, total/smallestSide);
     else
       setDivisions(total/smallestSide, smallestSide);
-  } else if (otherFactor > numberOfPartitions) {
-    setDivisions(numberOfPartitions, 1);
+  } else if (otherFactor > numParts) {
+    setDivisions(numParts, 1);
   } else {
     setDivisions(highestFactor, otherFactor);
   }
 }
 
 void allocatepartitions() {
-  partitions = malloc(sizeof(struct partition)*numberOfPartitions);
+  partitions = malloc(sizeof(struct partition)*numParts);
 }
 
 void deallocatepartitions() {
@@ -87,7 +82,7 @@ int findMissingYSpace(int row) {
   result = 0;
 
   for(i = 0; (row - numXDivisions * i) >= 0; i++) {
-    result += partitions[row - numXDivisions * i].lengthY;
+    result += partitions[row - numXDivisions * i].y1;
   }
   result = widthY - result;
   return result;
@@ -115,11 +110,11 @@ void splitGeometry(void) {
 
   allocatepartitions();
   compareSides();
-  extraPartitions = 0; //Range of 0 - (smallestSide - 1)
+  extraPartitions = 0;
 
-  if (numberOfPartitions > largestSide) {
-    while((numberOfPartitions % smallestSide != 0) && (numberOfPartitions % largestSide != 0))
-      numberOfPartitions--;
+  if (numParts > largestSide) {
+    while((numParts % smallestSide != 0) && (numParts % largestSide != 0))
+      numParts--;
   }
 
   determineFactors();
@@ -132,33 +127,33 @@ void splitGeometry(void) {
   tempExtraX = extraX;
   totalX = 0;
 
-  for (i = 0; i < numberOfPartitions ; i++) {
+  for (i = 0; i < numParts ; i++) {
     if (i == 0) {
-      partitions[i].startX = 0;
-      partitions[i].startY = 0;
+      partitions[i].x0 = 0;
+      partitions[i].y0 = 0;
 
     } else if (totalX % widthX == 0) {
       tempExtraX = extraX;
-      partitions[i].startX = 0;
-      partitions[i].startY = partitions[i-1].lengthY + partitions[i-1].startY;
+      partitions[i].x0 = 0;
+      partitions[i].y0 = partitions[i-1].y1 + partitions[i-1].y0;
 
       if(extraY > 0) {
         extraY--;
       }
     } else {
-      partitions[i].startX = partitions[i-1].startX + partitions[i-1].lengthX;
-      partitions[i].startY = partitions[i-1].startY;
+      partitions[i].x0 = partitions[i-1].x0 + partitions[i-1].x1;
+      partitions[i].y0 = partitions[i-1].y0;
     }
 
     totalX += xLength;
-    partitions[i].lengthX = xLength;
-    partitions[i].lengthY = yLength;
+    partitions[i].x1 = xLength;
+    partitions[i].y1 = yLength;
 
     if(extraY > 0)
-      partitions[i].lengthY += 1;
+      partitions[i].y1 += 1;
 
     if(tempExtraX > 0) {
-      partitions[i].lengthX += 1;
+      partitions[i].x1 += 1;
       totalX++;
       tempExtraX--;
     }
@@ -217,17 +212,16 @@ int* neighborList(int partitionNumber) {
   return list;
 }
 
-/* Partitions the board and returns a struct array of the partitions. Modifies processes as it sees fit */
 struct partition *generateBoard(int width, int length, int *processes) {
   widthX = width;
   widthY = length;
   if(*processes > (width * length))
     *processes = width * length;
-  numberOfPartitions = *processes;
+  numParts = *processes;
 
   compareSides();
   splitGeometry();
 
-  *processes = numberOfPartitions;
+  *processes = numParts;
   return partitions;
 }

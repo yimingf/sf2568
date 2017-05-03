@@ -2,10 +2,10 @@
 #define GEOMETRY_H
 
 struct partition {
-  int startX;
-  int startY;
-  int lengthX;
-  int lengthY;
+  int x0;
+  int y0;
+  int x1;
+  int y1;
 };
 struct pt {
   int numFox; // foxes
