@@ -1,5 +1,5 @@
-#ifndef GEOMETRYSPLITTER_H_INCLUDED
-#define GEOMETRYSPLITTER_H_INCLUDED
+#ifndef GEOMETRY_H
+#define GEOMETRY_H
 
 struct partition {
   int startX;
