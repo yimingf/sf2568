@@ -1,118 +1,30 @@
+/*
+  kth sf2568 parpro-17 (parallel computations for large-scale problems) project.
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <mpi.h>
 #include <math.h>
 
-#include "Geometry.h"
+#include "geo.h"
+#include "alg.h"
 
-int id, numIter, numPartitions;
-struct partition* partitions;
-int myBoardSize, myNeighborIDs[4]; // 1
-struct pt *myBoard, *nextBoard, *masterBoard;
-int masterBoardCol, masterBoardRow;
-struct partition conf;
+int id, numIter, numPartitions, myBoardSize, myNeighborIDs[4];
+int f, r, v, f_p, r_p, lifeRabbit;
+int masterBoardCol, masterBoardRow, numMalloc;
+struct partition *partitions, conf;
+struct pt *myBoard, *nextBoard, *masterBoard, **allocatedMemory;
 MPI_Status lastStatus;
 MPI_Request lastRequest;
-struct pt **allocatedMemory; // 2
-int numMalloc;
 
 int reproduceRateRabbit = 63;
 int reproduceRateFox = 180;
 double growthRateVeg = 1.1;
-int lifeFox = 1460;
-
-int birthRabbit (int r, int v) {
-  if (r<2) {
-    return 0;
-  } else if (v<200) {
-    if (r>700) {
-      return 2;
-    } else {
-      return 3;
-    }
-  } else if (v<500) {
-    if (r>700) {
-      return 3;
-    } else {
-      return 4;
-    }
-  } else if (v<800) {
-    if (r>700) {
-      return 4;
-    } else if (r>200) {
-      return 5;
-    } else {
-      return 6;
-    }
-  } else {
-    if (r>5000) {
-      return 5;
-    } else if (r>700) {
-      return 7;
-    } else if (r>200) {
-      return 8;
-    } else {
-      return 9;
-    }
-  }
-}
-
-int birthFox (int f, int r) {
-  if (f<2) {
-    return 0;
-  } else if (r<3) {
-    if (f>100) {
-      return 0;
-    } else if (f>50) {
-      return 1;
-    } else {
-      return 2;
-    }
-  } else if (r<10) {
-    if (f>100) {
-      return 1;
-    } else if (f>50) {
-      return 2;
-    } else {
-      return 3;
-    }
-  } else if (r<40) {
-    if (f>100) {
-      return 2;
-    } else if (f>10) {
-      return 3;
-    } else {
-      return 4;
-    }
-  } else {
-    if (f>50) {
-      return 3;
-    } else if (f>10) {
-      return 4;
-    } else {
-      return 5;
-    }
-  }
-}
-
-typedef enum {
-  N_UPDATE,
-  W_UPDATE,
-  E_UPDATE,
-  S_UPDATE,
-  BOUNDS_MESSAGE,
-  GENERATION_MESSAGE,
-  NEIGHBORLIST_MESSAGE,
-  BOARD_MESSAGE,
-  PARTITION_MESSAGE
-} tagType;
+int lifeFox = 460; // 1460 (4 yrs) is too long for long simulation.
 
 void swapBoards();
-
-struct pt getArray(int x, int y) { // 2
-  return myBoard[x+y*conf.x1];
-}
 
 void setBeforeMig(int x, int y, int f, int r, int v) { // 2
   nextBoard[x+y*conf.x1].numFox = f;
@@ -167,13 +79,12 @@ void parseFile(int argc, char** argv) {
 
 void finalizeBoard() {
   int size;
-
   if(!id) {
     struct pt* incomingBoard; // 2
-
+    incomingBoard = malloc(sizeof(struct pt)*size);
     for(int i = 0; i < numPartitions; i++) {
       size = partitions[i].x1*partitions[i].y1;
-      incomingBoard = malloc(sizeof(struct pt)*size); // 2
+       // 2
       MPI_Recv(incomingBoard, sizeof(struct pt)*size, MPI_BYTE, i, BOARD_MESSAGE, MPI_COMM_WORLD, &lastStatus);
 
       for(int k = 0; k < partitions[i].y1; k++) {
@@ -181,13 +92,23 @@ void finalizeBoard() {
           int equivLocation = j+k*partitions[i].x1; // 1
           masterBoard[j+partitions[i].x0+((k+partitions[i].y0)*masterBoardCol)] = incomingBoard[equivLocation];
         }
-      }
-      free(incomingBoard);
+      } 
     }
+    free(incomingBoard);
 
     printf("\nFinal board config:\n"); // 2
     for(int i = 0; i < masterBoardCol*masterBoardRow; i++) {
+      printf("%d ", masterBoard[i].numFox);
+      if((i + 1) % (masterBoardCol) == 0)
+        printf("\n");
+    }
+    for(int i = 0; i < masterBoardCol*masterBoardRow; i++) {
       printf("%d ", masterBoard[i].numRab);
+      if((i + 1) % (masterBoardCol) == 0)
+        printf("\n");
+    }
+    for(int i = 0; i < masterBoardCol*masterBoardRow; i++) {
+      printf("%d ", masterBoard[i].numVeg);
       if((i + 1) % (masterBoardCol) == 0)
         printf("\n");
     }
@@ -250,22 +171,17 @@ void initializeBoard(int argc, char** argv) {
     MPI_Isend(&numIter, 1, MPI_INT, i, GENERATION_MESSAGE, MPI_COMM_WORLD, &lastRequest);
 }
 
-void calculateBoard() {
-  int *memoryArray[4], memoryUsed;
-  int *sendEdge, sendSize, recvSize, tag;
-
-  int *recvEdge; // 2
-  int currentNeighbor;
-
-  int f, r, v, f_p, r_p, f_, r_;
-  int lifeRabbit;
+void calculateBoard (void) {
+  int currentNeighbor, day, mem;
   int *migrationFox, *migrationRabbit;
-  bool birthFlagRabbit;
-  bool birthFlagFox;
-
-  for (int day = 0; day<numIter; day++) { // each generation.
-    memoryUsed = 0;
-
+  int *sendEdge, *recvEdge, sendSize, recvSize, tag;
+  int *memArray[4];
+  bool birthFlagRabbit, birthFlagFox;
+  
+  migrationFox = malloc(sizeof(int)*(conf.x1+4)*(conf.y1+4));
+  migrationRabbit = malloc(sizeof(int)*(conf.x1+2)*(conf.y1+2));
+  for (day = 0; day<numIter; day++) {
+    mem = 0;
     birthFlagRabbit = false;
     birthFlagFox = false;
 
@@ -309,7 +225,7 @@ void calculateBoard() {
         } else {
           r_p = (int)(floor(f*2/7));
         }
-        if (r_p>r) {
+        if (r_p>r || r==0) {
           r = 0;
           f = (int)(floor(0.9*f)); // starve
         } else {
@@ -341,9 +257,6 @@ void calculateBoard() {
         setBeforeMig(i, j, f, r, v);
       }
     }
-
-    migrationRabbit = malloc(sizeof(int)*(conf.x1+2)*(conf.y1+2));
-    migrationFox = malloc(sizeof(int)*(conf.x1+4)*(conf.x1+4));
 
     for (int j = 0; j<conf.y1; j++) {
       for (int i = 0; i<conf.x1; i++) {
@@ -390,11 +303,9 @@ void calculateBoard() {
         }
         r_p *= (-foo);
         setMig(i, j, f_p, r_p);
-
       }
     }
 
-    // communication.
     if (id < numPartitions) {
       for (int j = 0; j < 4; j++) { // 1
         if (myNeighborIDs[j] > -1) {
@@ -457,7 +368,7 @@ void calculateBoard() {
               break;
           }
 
-          memoryArray[memoryUsed++] = sendEdge;
+          memArray[mem++] = sendEdge;
           MPI_Isend(sendEdge, sendSize, MPI_INT, myNeighborIDs[j], tag, MPI_COMM_WORLD, &lastRequest);
         }
       }
@@ -537,28 +448,29 @@ void calculateBoard() {
               break;
           }
 
-          free(recvEdge);
         }
       }
       swapBoards();
 
-      free(migrationFox);
-      free(migrationRabbit);
-      for(int i = 0; i < memoryUsed; i++) {
-        free(memoryArray[i]);
+      
+      for(int i = 0; i < mem; i++) {
+        free(memArray[i]);
       }
     }
     MPI_Barrier(MPI_COMM_WORLD);
   }
   MPI_Barrier(MPI_COMM_WORLD);
 
-  if(id < numPartitions)
-    MPI_Isend(myBoard, sizeof(struct pt)*conf.x1*conf.y1, MPI_BYTE, 0, BOARD_MESSAGE, MPI_COMM_WORLD, &lastRequest); // 1 // 2
+  free(migrationFox);
+  free(migrationRabbit);
+  if(id < numPartitions) {
+    MPI_Isend(myBoard, sizeof(struct pt)*conf.x1*conf.y1, MPI_BYTE, 0, BOARD_MESSAGE, MPI_COMM_WORLD, &lastRequest);
+  }
 
   MPI_Barrier(MPI_COMM_WORLD);
 }
 
-void swapBoards(void) {
+void swapBoards (void) {
   struct pt* tempBoard; // 2
   tempBoard = myBoard;
   myBoard = nextBoard;
@@ -595,6 +507,7 @@ void initMPI(int argc, char ** argv) {
 
 int main(int argc, char ** argv) {
   initMPI(argc, argv);
+
   calculateBoard();
   finalizeBoard();
   return 0;
