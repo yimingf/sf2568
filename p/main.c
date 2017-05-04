@@ -27,8 +27,22 @@ int lifeFox = 460; // 1460 (4 yrs) is too long for long simulation.
 void swapBoards();
 
 void setBeforeMig(int x, int y, int f, int r, int v) { // 2
-  nextBoard[x+y*conf.x1].numFox = f;
-  nextBoard[x+y*conf.x1].numRab = r;
+  if (f<0) { // boundary check.
+    nextBoard[x+y*conf.x1].numFox = 0;
+  } else if (f>65535) {
+    nextBoard[x+y*conf.x1].numFox = 65535;
+  } else {
+    nextBoard[x+y*conf.x1].numFox = f;
+  }
+
+  if (r<0) {
+    nextBoard[x+y*conf.x1].numRab = 0;
+  } else if (r>65535) {
+    nextBoard[x+y*conf.x1].numRab = 65535;
+  } else {
+    nextBoard[x+y*conf.x1].numRab = r;
+  }
+  
   nextBoard[x+y*conf.x1].numVeg = v;
 }
 
@@ -85,9 +99,8 @@ void finalizeBoard() {
     for(int i = 0; i < numPartitions; i++) {
       size = partitions[i].x1*partitions[i].y1;
       incomingBoard = malloc(sizeof(struct pt)*size);
-       // 2
+      
       MPI_Recv(incomingBoard, sizeof(struct pt)*size, MPI_BYTE, i, BOARD_MESSAGE, MPI_COMM_WORLD, &lastStatus);
-
       for(int k = 0; k < partitions[i].y1; k++) {
         for(int j = 0; j < partitions[i].x1; j++) {
           int equivLocation = j+k*partitions[i].x1; // 1
@@ -182,6 +195,16 @@ void calculateBoard (void) {
   migrationFox = malloc(sizeof(int)*(conf.x1+4)*(conf.y1+4));
   migrationRabbit = malloc(sizeof(int)*(conf.x1+2)*(conf.y1+2));
   for (day = 0; day<numIter; day++) {
+    for (int j = 0; j<(conf.y1+4); j++) {
+      for (int i = 0; i<(conf.x1+4); i++) {
+        migrationFox[i+j*(conf.x1+4)] = 0;
+      }
+    }
+    for (int j = 0; j<(conf.y1+2); j++) {
+      for (int i = 0; i<(conf.x1+2); i++) {
+        migrationRabbit[i+j*(conf.x1+2)] = 0;
+      }
+    }
     mem = 0;
     birthFlagRabbit = false;
     birthFlagFox = false;
@@ -451,13 +474,18 @@ void calculateBoard (void) {
 
         }
       }
+
+      for (int j = 0; j<conf.y1; j++) {
+        for (int i = 0; i<conf.x1; i++) {
+          setMig(i, j, migrationFox[(i+2)+(j+2)*(conf.x1+4)], migrationRabbit[(i+1)+(j+1)*(conf.x1+2)]);
+        }
+      }
       swapBoards();
 
-      if (id == 0) {
-        printf("caonima %d\n", day);
+      if (id== 0 && day%1000 == 0) {
+        printf("%d days has gone.\n", day);
       }
 
-      
       for(int i = 0; i < mem; i++) {
         free(memArray[i]);
       }
@@ -512,7 +540,6 @@ void initMPI(int argc, char ** argv) {
 
 int main(int argc, char ** argv) {
   initMPI(argc, argv);
-
   calculateBoard();
   finalizeBoard();
   return 0;

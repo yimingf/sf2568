@@ -90,8 +90,6 @@ int findMissingYSpace (int row) {
 
 void split (void) {
   int i, xLength, yLength, extraX, extraY, tempExtraX, totalX;
-  bool foo = false;
-
   allocatepartitions();
   compareSides();
   extraPartitions = 0;
@@ -100,7 +98,6 @@ void split (void) {
     while((numParts % sideSmall != 0) && (numParts % sideLarge != 0))
       numParts--;
   }
-
   determineFactors();
 
   xLength = wx/numDivX;
@@ -115,20 +112,16 @@ void split (void) {
     if (i == 0) {
       partitions[i].x0 = 0;
       partitions[i].y0 = 0;
-      partitions[i].isRed = false; // initial
     } else if (totalX % wx == 0) {
       tempExtraX = extraX;
       partitions[i].x0 = 0;
-      partitions[i].y0 = partitions[i-1].y1 + partitions[i-1].y0;
-      foo = !foo; // switch between red/black
-      partitions[i].isRed = foo;
+      partitions[i].y0 = partitions[i-1].y1+partitions[i-1].y0;
       if (extraY > 0) {
         extraY--;
       }
     } else {
-      partitions[i].x0 = partitions[i-1].x0 + partitions[i-1].x1;
+      partitions[i].x0 = partitions[i-1].x0+partitions[i-1].x1;
       partitions[i].y0 = partitions[i-1].y0;
-      partitions[i].isRed = !partitions[i-1].isRed;
     }
 
     totalX += xLength;
@@ -143,8 +136,6 @@ void split (void) {
       totalX++;
       tempExtraX--;
     }
-
-    printf("part %d isRed? %d\n", i, partitions[i].isRed);
   }
 }
 
