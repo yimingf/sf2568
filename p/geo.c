@@ -49,10 +49,11 @@ void determineFactors (void) {
   total = numParts+extraPartitions;
   root = sqrt(total);
 
-  for(i = 1; i <= root; i++)
-    if(total % i == 0)
+  for (i = 1; i <= root; i++) {
+    if (total % i == 0) {
       highestFactor = i;
-
+    }
+  }
   otherFactor = total/highestFactor;
 
   if ((highestFactor > sideLarge || otherFactor > sideSmall) && (highestFactor > sideSmall || otherFactor > sideLarge)) {

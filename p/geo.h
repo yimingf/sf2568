@@ -20,7 +20,6 @@ struct partition {
   int y0;
   int x1;
   int y1;
-  bool isRed;
 };
 struct pt {
   int numFox; // foxes

@@ -81,9 +81,10 @@ void finalizeBoard() {
   int size;
   if(!id) {
     struct pt* incomingBoard; // 2
-    incomingBoard = malloc(sizeof(struct pt)*size);
+    
     for(int i = 0; i < numPartitions; i++) {
       size = partitions[i].x1*partitions[i].y1;
+      incomingBoard = malloc(sizeof(struct pt)*size);
        // 2
       MPI_Recv(incomingBoard, sizeof(struct pt)*size, MPI_BYTE, i, BOARD_MESSAGE, MPI_COMM_WORLD, &lastStatus);
 
@@ -92,10 +93,10 @@ void finalizeBoard() {
           int equivLocation = j+k*partitions[i].x1; // 1
           masterBoard[j+partitions[i].x0+((k+partitions[i].y0)*masterBoardCol)] = incomingBoard[equivLocation];
         }
-      } 
+      }
+      free(incomingBoard);
     }
-    free(incomingBoard);
-
+    
     printf("\nFinal board config:\n"); // 2
     for(int i = 0; i < masterBoardCol*masterBoardRow; i++) {
       printf("%d ", masterBoard[i].numFox);
@@ -451,6 +452,10 @@ void calculateBoard (void) {
         }
       }
       swapBoards();
+
+      if (id == 0) {
+        printf("caonima %d\n", day);
+      }
 
       
       for(int i = 0; i < mem; i++) {
