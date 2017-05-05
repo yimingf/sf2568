@@ -3,5 +3,6 @@
 
 int birthRabbit (int r, int v);
 int birthFox (int f, int r);
+int lifeSpanRabbit (int v);
 
 #endif

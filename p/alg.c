@@ -82,3 +82,15 @@ int birthFox (int f, int r) {
     }
   }
 }
+
+int lifeSpanRabbit (int v) {
+  if (v>350) {
+    return 126;
+  } else if (v>250) {
+    return 72;
+  } else if (v>150) {
+    return 36;
+  } else {
+    return 6;
+  }
+}
