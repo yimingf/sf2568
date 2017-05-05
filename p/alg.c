@@ -85,7 +85,7 @@ int birthFox (int f, int r) {
 
 int lifeSpanRabbit (int v) {
   if (v>350) {
-    return 126;
+    return 144;
   } else if (v>250) {
     return 72;
   } else if (v>150) {
